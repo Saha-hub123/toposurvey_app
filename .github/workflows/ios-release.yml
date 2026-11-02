@@ -1,0 +1,161 @@
+name: Build & Release TopoSurvey iOS
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+      - 'ios-v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Custom Tag Release (e.g. v1.0.0 or ios-v1.0.0, leave empty for auto-tag)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release-ios:
+    name: Auto Tag, Compile iOS & Release
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Latest Stable Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Set up Flutter Environment
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter & System Doctor
+        run: |
+          flutter --version
+          flutter doctor -v
+
+      - name: Get Project Dependencies
+        run: |
+          flutter pub get
+
+      - name: Run Unit & Quality Tests
+        run: |
+          flutter test
+
+      - name: Generate Automatic Release Tag
+        id: tag_generator
+        run: |
+          if [[ -n "${{ github.event.inputs.tag_name }}" ]]; then
+            RELEASE_TAG="${{ github.event.inputs.tag_name }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            # Automatic semantic versioning: ios-v1.0.<run_number>
+            RELEASE_TAG="ios-v1.0.${{ github.run_number }}"
+            echo "Auto-creating git tag: $RELEASE_TAG"
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "Automated TopoSurvey iOS Release $RELEASE_TAG"
+            git push origin "$RELEASE_TAG" || echo "Tag already pushed or remote skipped"
+          fi
+          echo "tag_name=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Flutter iOS App (Release, No Codesign)
+        run: |
+          flutter build ios --release --no-codesign
+
+      - name: Package Sideloadable IPA and App Bundle
+        run: |
+          mkdir -p release-ios-artifacts
+          
+          # Create Sideloadable IPA (Payload format for AltStore, Sideloadly, TrollStore)
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r ../../../release-ios-artifacts/TopoSurvey-iOS-Unsigned-${{ steps.tag_generator.outputs.tag_name }}.ipa Payload
+          
+          # Package compiled Runner.app
+          zip -r ../../../release-ios-artifacts/TopoSurvey-iOS-RunnerApp-${{ steps.tag_generator.outputs.tag_name }}.zip Runner.app
+          cd ../../..
+
+      - name: Package Configured iOS Source Code
+        run: |
+          # Package clean source code with configured Info.plist ready for Xcode
+          zip -r release-ios-artifacts/TopoSurvey-iOS-SourceCode-${{ steps.tag_generator.outputs.tag_name }}.zip \
+            lib/ \
+            ios/ \
+            pubspec.yaml \
+            pubspec.lock \
+            analysis_options.yaml \
+            README.md \
+            -x "*.git*" "ios/Pods/*" "build/*" ".dart_tool/*"
+
+          ls -lh release-ios-artifacts/
+
+      - name: Create GitHub Release and Upload iOS Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_generator.outputs.tag_name }}
+          name: "TopoSurvey iOS Release ${{ steps.tag_generator.outputs.tag_name }}"
+          body: |
+            ## 🍏 TopoSurvey - Multi-Phone Topographic Surveying for Apple iOS (iPhone/iPad)
+
+            Rilis resmi aplikasi **TopoSurvey** untuk perangkat iPhone/iPad. Aplikasi ini mendukung penuh sinkronisasi **4 Handphone lintas OS (Android & iPhone)** menggunakan jaringan lokal Wi-Fi Hotspot P2P (UDP Mesh), BLE Ranging, dan koreksi elevasi Barometer diferensial.
+
+            ---
+
+            ### 📦 Berkas Unduhan Rilis:
+            1. **`TopoSurvey-iOS-SourceCode-${{ steps.tag_generator.outputs.tag_name }}.zip`**:
+               - Source code Flutter & iOS yang **sudah dikonfigurasi lengkap** dengan seluruh izin privasi Apple (`Info.plist`: Bluetooth, Lokasi GPS, Barometer CoreMotion, dan Local Network Mesh).
+               - Siap dibuka langsung di **Xcode (macOS)** untuk di-install ke iPhone pribadi dengan akun Apple ID gratis.
+            2. **`TopoSurvey-iOS-Unsigned-${{ steps.tag_generator.outputs.tag_name }}.ipa`**:
+               - Berkas biner instalasi iOS (.ipa) yang sudah ter-compile release.
+               - Dapat dipasang langsung ke iPhone tanpa Xcode menggunakan tool sideloading: **Sideloadly** (bisa dari Windows/Mac), **AltStore**, atau **TrollStore**.
+            3. **`TopoSurvey-iOS-RunnerApp-${{ steps.tag_generator.outputs.tag_name }}.zip`**:
+               - Bundle `Runner.app` hasil kompilasi AOT Release Flutter.
+
+            ---
+
+            ### 📲 Panduan Praktis Install ke iPhone:
+
+            #### Cara 1: Menggunakan Sideloadly (Bisa dari Laptop Windows / Mac - Paling Mudah)
+            1. Unduh berkas **`TopoSurvey-iOS-Unsigned-*.ipa`** di atas.
+            2. Unduh dan install aplikasi gratis [Sideloadly](https://sideloadly.io) di komputer Anda (tersedia untuk Windows & macOS).
+            3. Sambungkan iPhone ke komputer dengan kabel USB dan buka Sideloadly.
+            4. Masukkan Apple ID gratis Anda, seret (*drag & drop*) file `.ipa` ke Sideloadly, lalu klik **Start**.
+            5. Setelah selesai terpasang, buka iPhone: Masuk ke **Pengaturan (Settings) > Umum (General) > Manajemen VPN & Perangkat > Klik Akun Apple ID Anda > Percayai (Trust)**.
+
+            #### Cara 2: Menggunakan Xcode di Mac (Dengan Source Code)
+            1. Unduh dan ekstrak berkas **`TopoSurvey-iOS-SourceCode-*.zip`** di komputer Mac.
+            2. Buka folder proyek di terminal, jalankan `flutter pub get`.
+            3. Buka file workspace di Xcode: `open ios/Runner.xcworkspace`.
+            4. Di Xcode, buka tab **Runner > Signing & Capabilities**, centang **Automatically manage signing**, dan pilih **Team** (akun Apple ID gratis Anda).
+            5. Pilih perangkat iPhone Anda di bagian target atas, lalu klik tombol **Play (Run)** untuk memasang aplikasi.
+
+            ---
+
+            ### 🌐 Petunjuk Sinkronisasi 4 HP di Lapangan:
+            - **1 HP sebagai Hotspot**: Aktifkan fitur Personal Hotspot/Tethering pada salah satu HP (Android atau iPhone).
+            - **3 HP lainnya**: Hubungkan ke Wi-Fi Hotspot tersebut.
+            - **Buka Aplikasi TopoSurvey**:
+              - Pada iPhone, pilih **"Allow"** saat muncul dialog izin akses *Local Network*.
+              - Atur peran masing-masing HP: 3 HP sebagai **Base Anchor A, B, C**, dan 1 HP sebagai **Rover**.
+              - Data elevasi barometer dan koordinat akan otomatis tersinkronisasi secara real-time!
+          files: |
+            release-ios-artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -66,5 +66,24 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
+	<!-- TopoSurvey Hardware & Network Permissions for iOS -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Aplikasi memerlukan akses Bluetooth untuk mengukur jarak ke Base Station Patok Survey.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Aplikasi memerlukan Bluetooth untuk berkomunikasi dengan Base Station Patok Survey.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Aplikasi memerlukan akses GPS untuk menentukan koordinat awal Patok dan Rover.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Aplikasi memerlukan akses lokasi selama survey topografi berlangsung.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Aplikasi memerlukan sensor barometer dan motion untuk mengukur elevasi dan kontur tanah.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Aplikasi memerlukan akses jaringan lokal (Wi-Fi/Hotspot) untuk sinkronisasi data antar HP survey.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_toposurvey._udp</string>
+		<string>_toposurvey._tcp</string>
+	</array>
 </dict>
 </plist>
