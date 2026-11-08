@@ -3,12 +3,17 @@ import 'package:flutter/material.dart';
 import '../models/anchor_node.dart';
 import '../models/survey_point.dart';
 import '../services/multilateration_engine.dart';
+import '../services/contour_engine.dart';
 
 class TopoCanvas extends StatelessWidget {
   final List<AnchorNode> anchors;
   final List<SurveyPoint> points;
   final MultilaterationResult? liveRover;
   final Map<String, double> liveDistances;
+  final bool showContourLines;
+  final bool showPoints;
+  final bool showPointLabels;
+  final double contourInterval;
 
   const TopoCanvas({
     super.key,
@@ -16,6 +21,10 @@ class TopoCanvas extends StatelessWidget {
     required this.points,
     this.liveRover,
     this.liveDistances = const {},
+    this.showContourLines = true,
+    this.showPoints = true,
+    this.showPointLabels = true,
+    this.contourInterval = 0.5,
   });
 
   @override
@@ -30,6 +39,10 @@ class TopoCanvas extends StatelessWidget {
               points: points,
               liveRover: liveRover,
               liveDistances: liveDistances,
+              showContourLines: showContourLines,
+              showPoints: showPoints,
+              showPointLabels: showPointLabels,
+              contourInterval: contourInterval,
             ),
           ),
         );
@@ -43,13 +56,36 @@ class _TopoPainter extends CustomPainter {
   final List<SurveyPoint> points;
   final MultilaterationResult? liveRover;
   final Map<String, double> liveDistances;
+  final bool showContourLines;
+  final bool showPoints;
+  final bool showPointLabels;
+  final double contourInterval;
 
   _TopoPainter({
     required this.anchors,
     required this.points,
     required this.liveRover,
     required this.liveDistances,
+    required this.showContourLines,
+    required this.showPoints,
+    required this.showPointLabels,
+    required this.contourInterval,
   });
+
+  Color _getElevationColor(double normalizedZ) {
+    // 5-stop topographic color gradient:
+    // Cyan (Low / Lembah) -> Green -> Yellow -> Orange -> Deep Orange (High / Puncak)
+    final clamped = normalizedZ.clamp(0.0, 1.0);
+    if (clamped < 0.25) {
+      return Color.lerp(Colors.cyanAccent, Colors.greenAccent, clamped / 0.25)!;
+    } else if (clamped < 0.50) {
+      return Color.lerp(Colors.greenAccent, Colors.yellowAccent, (clamped - 0.25) / 0.25)!;
+    } else if (clamped < 0.75) {
+      return Color.lerp(Colors.yellowAccent, Colors.orangeAccent, (clamped - 0.50) / 0.25)!;
+    } else {
+      return Color.lerp(Colors.orangeAccent, Colors.deepOrangeAccent, (clamped - 0.75) / 0.25)!;
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -81,7 +117,7 @@ class _TopoPainter extends CustomPainter {
     final spanX = (maxX - minX).clamp(10.0, 500.0);
     final spanY = (maxY - minY).clamp(10.0, 500.0);
 
-    const padding = 35.0;
+    const padding = 38.0;
     final drawW = size.width - (padding * 2);
     final drawH = size.height - (padding * 2);
 
@@ -93,6 +129,8 @@ class _TopoPainter extends CustomPainter {
       final sy = size.height - padding - (wy - minY) * scale;
       return Offset(sx, sy);
     }
+
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
 
     // 2. Draw Background Grid
     final gridPaint = Paint()
@@ -109,8 +147,6 @@ class _TopoPainter extends CustomPainter {
     final endGridX = (maxX / gridStep).ceil() * gridStep;
     final startGridY = (minY / gridStep).floor() * gridStep;
     final endGridY = (maxY / gridStep).ceil() * gridStep;
-
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
 
     for (double gx = startGridX; gx <= endGridX; gx += gridStep) {
       final p1 = worldToScreen(gx, minY);
@@ -141,7 +177,7 @@ class _TopoPainter extends CustomPainter {
     // 3. Draw Anchor Baseline Triangle
     if (anchors.length >= 3) {
       final baseLinePaint = Paint()
-        ..color = Colors.amber.withOpacity(0.25)
+        ..color = Colors.amber.withOpacity(0.22)
         ..strokeWidth = 1.5
         ..style = PaintingStyle.stroke;
 
@@ -156,22 +192,108 @@ class _TopoPainter extends CustomPainter {
       canvas.drawPath(path, baseLinePaint);
     }
 
-    // 4. Draw Survey Points (Colored by Elevation Z)
-    if (points.isNotEmpty) {
-      double minZ = points.map((p) => p.z).reduce(min);
-      double maxZ = points.map((p) => p.z).reduce(max);
-      if (maxZ == minZ) maxZ += 1.0;
+    // 4. Generate & Draw Contour Lines (Isolines)
+    final all3dPoints = <ContourPoint>[];
+    for (final a in anchors) {
+      all3dPoints.add(ContourPoint(a.x, a.y, a.z));
+    }
+    for (final p in points) {
+      all3dPoints.add(ContourPoint(p.x, p.y, p.z));
+    }
 
+    double globalMinZ = 0.0, globalMaxZ = 1.0;
+    if (all3dPoints.isNotEmpty) {
+      globalMinZ = all3dPoints.map((p) => p.z).reduce(min);
+      globalMaxZ = all3dPoints.map((p) => p.z).reduce(max);
+      if (globalMaxZ == globalMinZ) globalMaxZ += 1.0;
+    }
+
+    if (showContourLines && all3dPoints.length >= 3) {
+      final contourResult = ContourEngine.generateContourLines(
+        points: all3dPoints,
+        interval: contourInterval,
+      );
+
+      final contourPaint = Paint()..style = PaintingStyle.stroke;
+
+      // Draw contour line segments
+      for (final seg in contourResult.segments) {
+        final screenP1 = worldToScreen(seg.p1.dx, seg.p1.dy);
+        final screenP2 = worldToScreen(seg.p2.dx, seg.p2.dy);
+
+        final normZ = (seg.elevation - globalMinZ) / (globalMaxZ - globalMinZ);
+        final baseColor = _getElevationColor(normZ);
+
+        if (seg.isMajor) {
+          contourPaint
+            ..color = baseColor.withOpacity(0.95)
+            ..strokeWidth = 2.2;
+        } else {
+          contourPaint
+            ..color = baseColor.withOpacity(0.48)
+            ..strokeWidth = 1.1;
+        }
+
+        canvas.drawLine(screenP1, screenP2, contourPaint);
+      }
+
+      // Draw elevation labels along Major Contour Lines
+      final labelBgPaint = Paint()
+        ..color = const Color(0xFF0F1420).withOpacity(0.85)
+        ..style = PaintingStyle.fill;
+
+      final labelBorderPaint = Paint()
+        ..color = Colors.white.withOpacity(0.3)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8;
+
+      contourResult.labelPositions.forEach((elevation, positions) {
+        final normZ = (elevation - globalMinZ) / (globalMaxZ - globalMinZ);
+        final labelColor = _getElevationColor(normZ);
+
+        for (final pos in positions) {
+          final screenPos = worldToScreen(pos.dx, pos.dy);
+
+          textPainter.text = TextSpan(
+            text: '${elevation.toStringAsFixed(1)}m',
+            style: TextStyle(
+              color: labelColor,
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+            ),
+          );
+          textPainter.layout();
+
+          final rect = Rect.fromCenter(
+            center: screenPos,
+            width: textPainter.width + 6,
+            height: textPainter.height + 4,
+          );
+
+          // Draw pill background so text is crystal clear over grid/lines
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+            labelBgPaint,
+          );
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+            labelBorderPaint,
+          );
+
+          textPainter.paint(
+            canvas,
+            Offset(screenPos.dx - textPainter.width / 2, screenPos.dy - textPainter.height / 2),
+          );
+        }
+      });
+    }
+
+    // 5. Draw Survey Points (Colored by Elevation Z)
+    if (showPoints && points.isNotEmpty) {
       for (final p in points) {
         final screenPos = worldToScreen(p.x, p.y);
-        final normalizedZ = ((p.z - minZ) / (maxZ - minZ)).clamp(0.0, 1.0);
-
-        // Color ramp: Blue (low) -> Green -> Yellow -> Orange -> Red (high)
-        final pointColor = Color.lerp(
-          Colors.cyanAccent,
-          Colors.deepOrangeAccent,
-          normalizedZ,
-        )!;
+        final normalizedZ = ((p.z - globalMinZ) / (globalMaxZ - globalMinZ)).clamp(0.0, 1.0);
+        final pointColor = _getElevationColor(normalizedZ);
 
         final fillPaint = Paint()
           ..color = pointColor
@@ -182,27 +304,28 @@ class _TopoPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5;
 
-        canvas.drawCircle(screenPos, 5.0, fillPaint);
-        canvas.drawCircle(screenPos, 5.0, strokePaint);
+        canvas.drawCircle(screenPos, 4.5, fillPaint);
+        canvas.drawCircle(screenPos, 4.5, strokePaint);
 
-        // Label with Point # and Z
-        textPainter.text = TextSpan(
-          text: 'P${p.pointNumber}: ${p.z.toStringAsFixed(2)}m',
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.9),
-            fontSize: 9,
-            fontWeight: FontWeight.w600,
-            shadows: const [
-              Shadow(color: Colors.black, blurRadius: 3),
-            ],
-          ),
-        );
-        textPainter.layout();
-        textPainter.paint(canvas, Offset(screenPos.dx + 7, screenPos.dy - 7));
+        if (showPointLabels) {
+          textPainter.text = TextSpan(
+            text: 'P${p.pointNumber}: ${p.z.toStringAsFixed(2)}m',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.9),
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              shadows: const [
+                Shadow(color: Colors.black, blurRadius: 3),
+              ],
+            ),
+          );
+          textPainter.layout();
+          textPainter.paint(canvas, Offset(screenPos.dx + 7, screenPos.dy - 7));
+        }
       }
     }
 
-    // 5. Draw Live Rover Position & Trilateration Range Circles
+    // 6. Draw Live Rover Position & Trilateration Range Circles
     if (liveRover != null) {
       final roverPos = worldToScreen(liveRover!.x, liveRover!.y);
 
@@ -262,7 +385,7 @@ class _TopoPainter extends CustomPainter {
       textPainter.paint(canvas, Offset(roverPos.dx + 14, roverPos.dy - 14));
     }
 
-    // 6. Draw Anchors (Base Stations)
+    // 7. Draw Anchors (Base Stations)
     final anchorColors = [
       Colors.blueAccent,
       Colors.orangeAccent,

@@ -261,6 +261,17 @@ class SurveyState extends ChangeNotifier {
     final anchorA = _anchors.firstWhere((a) => a.id == 'ANCHOR_A');
     final relativeElev = pos.z - anchorA.z;
 
+    double? ptLat;
+    double? ptLon;
+    if (anchorA.latitude != null && anchorA.longitude != null) {
+      const double metersPerLatDegree = 111319.49;
+      final double latRad = anchorA.latitude! * (pi / 180.0);
+      final double metersPerLonDegree = metersPerLatDegree * cos(latRad);
+
+      ptLat = anchorA.latitude! + (pos.y / metersPerLatDegree);
+      ptLon = anchorA.longitude! + (pos.x / metersPerLonDegree);
+    }
+
     final point = SurveyPoint(
       id: 'PT_${DateTime.now().millisecondsSinceEpoch}',
       pointNumber: _nextPointNumber++,
@@ -268,6 +279,8 @@ class SurveyState extends ChangeNotifier {
       y: pos.y,
       z: pos.z,
       relativeElevation: relativeElev,
+      latitude: ptLat,
+      longitude: ptLon,
       pressureHpa: _liveRoverPressure,
       code: code,
       note: note,
@@ -291,6 +304,29 @@ class SurveyState extends ChangeNotifier {
   void clearPoints() {
     _surveyPoints.clear();
     _nextPointNumber = 1;
+    notifyListeners();
+  }
+
+  /// Ingest imported survey points (from CSV or GeoJSON)
+  void importPoints(List<SurveyPoint> importedPoints, {bool replaceExisting = false}) {
+    if (replaceExisting) {
+      _surveyPoints.clear();
+      _nextPointNumber = 1;
+    }
+    for (final p in importedPoints) {
+      _surveyPoints.add(p);
+      if (p.pointNumber >= _nextPointNumber) {
+        _nextPointNumber = p.pointNumber + 1;
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Ingest imported anchors (from CSV or GeoJSON)
+  void importAnchors(List<AnchorNode> importedAnchors) {
+    for (final a in importedAnchors) {
+      _updateOrAddAnchor(a);
+    }
     notifyListeners();
   }
 

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -41,8 +42,29 @@ class ExportService {
       'Timestamp',
     ]);
 
+    // Base A GPS reference for geodetic projection (if available)
+    final baseA = anchors.firstWhere(
+      (a) => a.id == 'ANCHOR_A',
+      orElse: () => anchors.first,
+    );
+    final hasGlobalGps = baseA.latitude != null && baseA.longitude != null;
+    final double? lat0 = baseA.latitude;
+    final double? lon0 = baseA.longitude;
+
+    const double metersPerLatDegree = 111319.49;
+    final double metersPerLonDegree = hasGlobalGps
+        ? metersPerLatDegree * cos(lat0! * (pi / 180.0))
+        : metersPerLatDegree;
+
     // Add Base Anchors as benchmark reference points
     for (final a in anchors) {
+      double? aLat = a.latitude;
+      double? aLon = a.longitude;
+      if (hasGlobalGps && (aLat == null || aLon == null)) {
+        aLat = lat0! + (a.y / metersPerLatDegree);
+        aLon = lon0! + (a.x / metersPerLonDegree);
+      }
+
       rows.add([
         a.id,
         0,
@@ -54,8 +76,8 @@ class ExportService {
         a.name,
         0.05,
         a.pressureHpa?.toStringAsFixed(2) ?? '',
-        a.latitude?.toStringAsFixed(7) ?? '',
-        a.longitude?.toStringAsFixed(7) ?? '',
+        aLat?.toStringAsFixed(7) ?? '',
+        aLon?.toStringAsFixed(7) ?? '',
         'BENCHMARK',
         a.lastSeen.toIso8601String(),
       ]);
@@ -64,6 +86,13 @@ class ExportService {
     // Add Survey Surface Points
     final dateFormat = DateFormat('yyyy-MM-dd HH:mm:ss');
     for (final p in points) {
+      double? pLat = p.latitude;
+      double? pLon = p.longitude;
+      if (hasGlobalGps && (pLat == null || pLon == null)) {
+        pLat = lat0! + (p.y / metersPerLatDegree);
+        pLon = lon0! + (p.x / metersPerLonDegree);
+      }
+
       rows.add([
         p.id,
         p.pointNumber,
@@ -75,8 +104,8 @@ class ExportService {
         p.note,
         p.estimatedAccuracy.toStringAsFixed(3),
         p.pressureHpa?.toStringAsFixed(2) ?? '',
-        p.latitude?.toStringAsFixed(7) ?? '',
-        p.longitude?.toStringAsFixed(7) ?? '',
+        pLat?.toStringAsFixed(7) ?? '',
+        pLon?.toStringAsFixed(7) ?? '',
         p.calculationMethod,
         dateFormat.format(p.timestamp),
       ]);
@@ -85,17 +114,36 @@ class ExportService {
     return rows.map(_formatCsvRow).join('\r\n');
   }
 
-  /// Generate GeoJSON FeatureCollection
+  /// Generate GeoJSON FeatureCollection with unified coordinate projection
   static String generateGeoJson({
     required List<SurveyPoint> points,
     required List<AnchorNode> anchors,
   }) {
     final features = <String>[];
 
+    final baseA = anchors.firstWhere(
+      (a) => a.id == 'ANCHOR_A',
+      orElse: () => anchors.first,
+    );
+    final hasGlobalGps = baseA.latitude != null && baseA.longitude != null;
+    final double? lat0 = baseA.latitude;
+    final double? lon0 = baseA.longitude;
+
+    const double metersPerLatDegree = 111319.49;
+    final double metersPerLonDegree = hasGlobalGps
+        ? metersPerLatDegree * cos(lat0! * (pi / 180.0))
+        : metersPerLatDegree;
+
     // Anchors
     for (final a in anchors) {
-      final lon = a.longitude ?? a.x;
-      final lat = a.latitude ?? a.y;
+      double lon = a.longitude ?? a.x;
+      double lat = a.latitude ?? a.y;
+
+      if (hasGlobalGps && (a.latitude == null || a.longitude == null)) {
+        lat = lat0! + (a.y / metersPerLatDegree);
+        lon = lon0! + (a.x / metersPerLonDegree);
+      }
+
       features.add('''{
         "type": "Feature",
         "geometry": {
@@ -106,6 +154,8 @@ class ExportService {
           "id": "${a.id}",
           "type": "ANCHOR_BASE",
           "name": "${a.name}",
+          "localX": ${a.x},
+          "localY": ${a.y},
           "elevation": ${a.z}
         }
       }''');
@@ -113,8 +163,14 @@ class ExportService {
 
     // Points
     for (final p in points) {
-      final lon = p.longitude ?? p.x;
-      final lat = p.latitude ?? p.y;
+      double lon = p.longitude ?? p.x;
+      double lat = p.latitude ?? p.y;
+
+      if (hasGlobalGps && (p.latitude == null || p.longitude == null)) {
+        lat = lat0! + (p.y / metersPerLatDegree);
+        lon = lon0! + (p.x / metersPerLonDegree);
+      }
+
       features.add('''{
         "type": "Feature",
         "geometry": {
@@ -125,6 +181,8 @@ class ExportService {
           "id": "${p.id}",
           "pointNumber": ${p.pointNumber},
           "code": "${p.code}",
+          "localX": ${p.x},
+          "localY": ${p.y},
           "elevation": ${p.z},
           "relativeElevation": ${p.relativeElevation},
           "accuracy": ${p.estimatedAccuracy},

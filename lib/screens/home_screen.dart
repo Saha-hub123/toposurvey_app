@@ -250,9 +250,9 @@ class HomeScreen extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    icon: const Icon(Icons.table_chart,
-                        color: Colors.orangeAccent),
-                    label: Text('Titik (${state.surveyPoints.length}) & Ekspor'),
+                    icon: const Icon(Icons.sync_alt,
+                        color: Colors.tealAccent),
+                    label: Text('Data Titik (${state.surveyPoints.length})'),
                     onPressed: () {
                       Navigator.push(
                         context,

@@ -1,4 +1,4 @@
-name: Build & Release TopoSurvey Android APK
+name: Build & Release TopoSurvey (Android & iOS)
 
 on:
   push:
@@ -8,23 +8,61 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Custom Tag Release (e.g. v1.1.0, leave empty for auto-tag)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  build-and-release:
-    name: Auto Tag, Compile Flutter & Release APK
+  # ==========================================
+  # JOB 1: GENERATE GIT RELEASE TAG
+  # ==========================================
+  generate-tag:
+    name: Generate Git Release Tag
     runs-on: ubuntu-latest
-
+    outputs:
+      tag_name: ${{ steps.tag_generator.outputs.tag_name }}
     steps:
-      - name: Checkout Source Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Java Development Kit (JDK 17)
+      - name: Determine & Push Release Tag
+        id: tag_generator
+        run: |
+          if [[ -n "${{ github.event.inputs.tag_name }}" ]]; then
+            RELEASE_TAG="${{ github.event.inputs.tag_name }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            # Automatic semantic versioning: v1.1.<run_number>
+            RELEASE_TAG="v1.1.${{ github.run_number }}"
+            echo "Auto-creating git tag: $RELEASE_TAG"
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "Automated TopoSurvey Release $RELEASE_TAG"
+            git push origin "$RELEASE_TAG" || echo "Tag already pushed or remote skipped"
+          fi
+          echo "tag_name=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+  # ==========================================
+  # JOB 2: COMPILE ANDROID APKS (LINUX)
+  # ==========================================
+  build-android:
+    name: Compile Android APKs
+    needs: generate-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -37,75 +75,166 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Get Project Dependencies
-        run: |
-          flutter pub get
-
-      - name: Run Quality Check & Unit Tests
-        run: |
-          flutter test
-
-      - name: Generate Automatic Release Tag
-        id: tag_generator
-        run: |
-          # If triggered by an existing git tag, use that tag
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
-          else
-            # Automatic semantic versioning: v1.0.<run_number>
-            RELEASE_TAG="v1.0.${{ github.run_number }}"
-            echo "Auto-creating git tag: $RELEASE_TAG"
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "$RELEASE_TAG" -m "Automated TopoSurvey Release $RELEASE_TAG"
-            git push origin "$RELEASE_TAG" || echo "Tag already pushed or remote skipped"
-          fi
-          echo "tag_name=$RELEASE_TAG" >> $GITHUB_OUTPUT
+      - name: Get Dependencies
+        run: flutter pub get
 
       - name: Build Universal Android Release APK
-        run: |
-          flutter build apk --release
+        run: flutter build apk --release
 
-      - name: Build Split Per-ABI APKs (Optimized for Arm64 & Arm32)
-        run: |
-          flutter build apk --release --split-per-abi
+      - name: Build Split Per-ABI APKs (Arm64 & Arm32)
+        run: flutter build apk --release --split-per-abi
 
-      - name: Rename & Organize APK Binaries
+      - name: Rename & Organize Android Binaries
         run: |
-          mkdir -p release-artifacts
-          cp build/app/outputs/flutter-apk/app-release.apk release-artifacts/TopoSurvey-Universal-${{ steps.tag_generator.outputs.tag_name }}.apk
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release-artifacts/TopoSurvey-arm64-v8a-${{ steps.tag_generator.outputs.tag_name }}.apk
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release-artifacts/TopoSurvey-armeabi-v7a-${{ steps.tag_generator.outputs.tag_name }}.apk
-          ls -lh release-artifacts/
+          mkdir -p android-artifacts
+          TAG="${{ needs.generate-tag.outputs.tag_name }}"
+          cp build/app/outputs/flutter-apk/app-release.apk android-artifacts/TopoSurvey-Android-Universal-$TAG.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk android-artifacts/TopoSurvey-Android-arm64-v8a-$TAG.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk android-artifacts/TopoSurvey-Android-armeabi-v7a-$TAG.apk
+          ls -lh android-artifacts/
 
-      - name: Create GitHub Release and Upload APKs
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-binaries
+          path: android-artifacts/*
+          retention-days: 1
+
+  # ==========================================
+  # JOB 3: COMPILE IOS BINARIES & SOURCE (MACOS)
+  # ==========================================
+  build-ios:
+    name: Compile iOS IPA & Source
+    needs: generate-tag
+    runs-on: macos-14
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Select Stable Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Set up Flutter Environment
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Build Flutter iOS App (Release, No Codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package Sideloadable IPA and App Bundle
+        run: |
+          mkdir -p ios-artifacts
+          TAG="${{ needs.generate-tag.outputs.tag_name }}"
+
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r ../../../ios-artifacts/TopoSurvey-iOS-Unsigned-$TAG.ipa Payload
+          zip -r ../../../ios-artifacts/TopoSurvey-iOS-RunnerApp-$TAG.zip Runner.app
+          cd ../../..
+
+      - name: Package Configured iOS Source Code
+        run: |
+          TAG="${{ needs.generate-tag.outputs.tag_name }}"
+          zip -r ios-artifacts/TopoSurvey-iOS-SourceCode-$TAG.zip \
+            lib/ \
+            ios/ \
+            pubspec.yaml \
+            pubspec.lock \
+            analysis_options.yaml \
+            README.md \
+            -x "*.git*" "ios/Pods/*" "build/*" ".dart_tool/*"
+          ls -lh ios-artifacts/
+
+      - name: Upload iOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-binaries
+          path: ios-artifacts/*
+          retention-days: 1
+
+  # ==========================================
+  # JOB 4: PUBLISH UNIFIED GITHUB RELEASE
+  # ==========================================
+  publish-release:
+    name: Publish Unified GitHub Release
+    needs: [generate-tag, build-android, build-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Download Android Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-binaries
+          path: release-assets
+
+      - name: Download iOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-binaries
+          path: release-assets
+
+      - name: Package Complete Project Source Code
+        run: |
+          TAG="${{ needs.generate-tag.outputs.tag_name }}"
+          zip -r release-assets/TopoSurvey-FullSourceCode-$TAG.zip . \
+            -x "*.git*" "build/*" ".dart_tool/*" "*.apk" "*.ipa"
+          ls -lh release-assets/
+
+      - name: Create Unified GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag_generator.outputs.tag_name }}
-          name: "TopoSurvey 3D Release ${{ steps.tag_generator.outputs.tag_name }}"
+          tag_name: ${{ needs.generate-tag.outputs.tag_name }}
+          name: "TopoSurvey Release ${{ needs.generate-tag.outputs.tag_name }}"
           body: |
-            ## 🏔️ TopoSurvey 3D - Multi-Phone Topographic Surveying APK
+            ## 🏔️ TopoSurvey 3D - Multi-Phone Topographic Surveying & Contour Mapping
 
-            ### 🚀 Fitur Rilis:
-            - **Multilaterasi / Trilaterasi Kooperatif (Minimal 3 Handphone)**:
-              - Mengatasi batas akurasi GPS HP standar (5-10m) dengan menghitung posisi relatif sub-meter melalui baseline segitiga 3 Base Anchor.
-            - **Penguatan Jarak BLE (Bluetooth Low Energy)**:
-              - Filter Kalman 1D pada stream RSSI untuk mengeliminasi noise multipath sinyal radio.
-              - Model propagasi Log-Distance Path Loss dengan kalibrasi lapangan langsung.
-            - **Sensor Fusi Barometer Diferensial**:
-              - Penentuan beda tinggi kontur permukaan ($\Delta Z$) presisi tinggi hingga ~10-20 cm tanpa terpengaruh cuaca berkat koreksi real-time Base Anchor A.
-            - **Sinkronisasi Mesh UDP Offline**:
-              - Berjalan 100% tanpa internet menggunakan Portable Wi-Fi Hotspot lokal antar handphone.
-            - **Visualisasi & Ekspor**:
-              - Peta 2D/3D kontur ketinggian permukaan dengan color gradient.
-              - Ekspor format standard: **CSV (PNEZD)**, **AutoCAD 3D DXF**, dan **GeoJSON**.
+            Rilis resmi terbaru aplikasi **TopoSurvey** dengan pembaruan besar: **Mesin Pembangkit Peta Garis Kontur Halus (IDW + Marching Squares)**, **Fitur Impor Berkas (CSV / GeoJSON)**, dan **Koreksi Proyeksi Geodesi WGS84 Otomatis**.
 
-            ### 📦 Unduh File APK:
-            - **`TopoSurvey-Universal-${{ steps.tag_generator.outputs.tag_name }}.apk`**: Kompatibel untuk semua model Android.
-            - **`TopoSurvey-arm64-v8a-${{ steps.tag_generator.outputs.tag_name }}.apk`**: Lebih ringan, khusus HP Android modern 64-bit.
-            - **`TopoSurvey-armeabi-v7a-${{ steps.tag_generator.outputs.tag_name }}.apk`**: Khusus HP Android 32-bit.
-          files: |
-            release-artifacts/*.apk
+            Aplikasi ini mendukung kolaborasi survei lapangan **Multi-Handphone (Android & iPhone)** dengan sinkronisasi jaringan lokal Wi-Fi Hotspot P2P (UDP Mesh), BLE Ranging, dan koreksi beda tinggi Barometer diferensial sub-meter.
+
+            ---
+
+            ### 🚀 Fitur Baru & Peningkatan:
+            1. **Mesin Garis Kontur Otomatis (*Contour Lines Engine*):**
+               - Menggunakan interpolasi permukaan **Inverse Distance Weighting (IDW)** dan **Marching Squares**.
+               - Menghasilkan kurva garis kontur nyata dengan pemisahan **Garis Mayor (Indeks / Tebal + Label Angka Ketinggian)** dan **Garis Minor (Tipis)**.
+               - Selector interval kontur instan di layar peta: `0.2m`, `0.5m`, `1.0m`, dan `2.0m`.
+               - Toggle lapisan: Tampilkan/sembunyikan garis kontur, titik ukur, atau label.
+            2. **Fitur Impor Data Survei Eksternal:**
+               - Mendukung import berkas **`.csv`**, **`.geojson`**, **`.json`**, dan **`.txt`** langsung dari memori perangkat.
+               - Pilihan integrasi: **"Gabungkan (Append)"** atau **"Ganti Data Lama (Replace)"**.
+            3. **Koreksi Otomatis Proyeksi Koordinat Geodesi:**
+               - Mengonversi pergeseran meter lokal $(X, Y)$ ke koordinat GPS absolut dunia nyata $(Lat, Lon)$ di sekitar Base Station A, sehingga ekspor GeoJSON dan CSV 100% akurat saat dibuka di Google Earth, Kepler.gl, QGIS, atau AutoCAD.
+            4. **Tampilan Antarmuka Responsif (Bebas Overflow):**
+               - Bilah kontrol dan legenda ramah semua ukuran layar smartphone.
+
+            ---
+
+            ### 📦 Berkas Unduhan Rilis:
+
+            #### 📱 Untuk Android:
+            - **`TopoSurvey-Android-Universal-${{ needs.generate-tag.outputs.tag_name }}.apk`**: Kompatibel untuk semua model Android.
+            - **`TopoSurvey-Android-arm64-v8a-${{ needs.generate-tag.outputs.tag_name }}.apk`**: Lebih ringan, khusus HP Android modern 64-bit.
+            - **`TopoSurvey-Android-armeabi-v7a-${{ needs.generate-tag.outputs.tag_name }}.apk`**: Khusus HP Android 32-bit.
+
+            #### 🍏 Untuk Apple iOS (iPhone / iPad):
+            - **`TopoSurvey-iOS-Unsigned-${{ needs.generate-tag.outputs.tag_name }}.ipa`**: Berkas instalasi iOS biner siap pasang via **Sideloadly** (dari laptop Windows/Mac), **AltStore**, atau **TrollStore** tanpa akun Apple Developer berbayar.
+            - **`TopoSurvey-iOS-SourceCode-${{ needs.generate-tag.outputs.tag_name }}.zip`**: Source code terkonfigurasi lengkap izin native iOS (`Info.plist`) siap dibuka dan di-install lewat **Xcode** di Mac dengan Apple ID gratis.
+            - **`TopoSurvey-iOS-RunnerApp-${{ needs.generate-tag.outputs.tag_name }}.zip`**: Bundle biner `Runner.app`.
+
+            #### 💻 Source Code Lengkap:
+            - **`TopoSurvey-FullSourceCode-${{ needs.generate-tag.outputs.tag_name }}.zip`**: Seluruh source code proyek TopoSurvey.
+          files: release-assets/*
           draft: false
           prerelease: false
         env:
