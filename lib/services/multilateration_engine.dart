@@ -8,6 +8,7 @@ class MultilaterationResult {
   final double residualError;
   final bool isAccurate;
   final String methodUsed;
+  final int activeAnchorCount;
 
   MultilaterationResult({
     required this.x,
@@ -16,21 +17,25 @@ class MultilaterationResult {
     required this.residualError,
     required this.isAccurate,
     required this.methodUsed,
+    this.activeAnchorCount = 3,
   });
 
   @override
   String toString() =>
-      'MultilaterationResult(x: ${x.toStringAsFixed(2)}, y: ${y.toStringAsFixed(2)}, z: ${z.toStringAsFixed(2)}, error: ${residualError.toStringAsFixed(3)}m, method: $methodUsed)';
+      'MultilaterationResult(x: ${x.toStringAsFixed(2)}, y: ${y.toStringAsFixed(2)}, z: ${z.toStringAsFixed(2)}, error: ${residualError.toStringAsFixed(3)}m, method: $methodUsed, anchors: $activeAnchorCount)';
 }
 
 class MultilaterationEngine {
-  /// Solves for (x, y, z) using 3 or more anchor nodes with measured distances.
-  /// If [differentialElevationZ] is provided (e.g. from high-precision differential barometer),
-  /// it is fused with the multilateration solution to yield sub-meter vertical accuracy.
+  /// Solves for (x, y, z) using 2 or more anchor nodes with measured distances.
+  /// Supports:
+  /// - 2 Anchors (Mode 3 HP: 2 Base Patok + 1 HP Rover) using bilateral circle intersection + Barometer Z
+  /// - 3 Anchors (Mode 4 HP: 3 Base Patok + 1 HP Rover) using exact 3-point trilateration
+  /// - 4+ Anchors using Linear Least Squares + Levenberg-Marquardt Gradient Refinement
   static MultilaterationResult? solve({
     required List<AnchorNode> anchors,
     required Map<String, double> measuredDistances,
     double? differentialElevationZ,
+    bool surveySidePositive = true,
   }) {
     // Filter anchors that have a valid measured distance
     final activeAnchors = <AnchorNode>[];
@@ -44,12 +49,22 @@ class MultilaterationEngine {
       }
     }
 
-    if (activeAnchors.length < 3) {
-      // Need at least 3 anchors for 2D/3D trilateration
+    if (activeAnchors.length < 2) {
+      // Minimal butuh 2 anchor (Mode 3 HP) atau 3 anchor (Mode 4 HP)
       return null;
     }
 
-    if (activeAnchors.length == 3) {
+    if (activeAnchors.length == 2) {
+      // Dukungan Mode 3 HP: 2 Base Station (A & B) + 1 Rover
+      return _solveBilateral2Anchors(
+        activeAnchors[0],
+        activeDistances[0],
+        activeAnchors[1],
+        activeDistances[1],
+        differentialElevationZ,
+        surveySidePositive: surveySidePositive,
+      );
+    } else if (activeAnchors.length == 3) {
       return _solveExactTrilateration(
         activeAnchors[0],
         activeDistances[0],
@@ -60,13 +75,85 @@ class MultilaterationEngine {
         differentialElevationZ,
       );
     } else {
-      // Overdetermined system (N >= 4 anchors): Use Linear Least Squares + Non-linear refinement
+      // Overdetermined system (N >= 4 anchors): Linear Least Squares + Refinement
       return _solveLinearLeastSquares(
         activeAnchors,
         activeDistances,
         differentialElevationZ,
       );
     }
+  }
+
+  /// Bilateral 2-Anchor Trilateration for 3-Phone Field Deployment:
+  /// (HP 1 = Base A, HP 2 = Base B, HP 3 = Rover)
+  /// Fuses baseline intersection with differential barometric altimetry.
+  static MultilaterationResult? _solveBilateral2Anchors(
+    AnchorNode a1,
+    double r1,
+    AnchorNode a2,
+    double r2,
+    double? baroZ, {
+    bool surveySidePositive = true,
+  }) {
+    final x1 = a1.x, y1 = a1.y;
+    final x2 = a2.x, y2 = a2.y;
+
+    final dx = x2 - x1;
+    final dy = y2 - y1;
+    final d = sqrt(dx * dx + dy * dy);
+
+    if (d < 1e-4) {
+      // Dua patok berada di titik yang sama
+      return null;
+    }
+
+    // Vektor satuan sepanjang garis baseline A1 -> A2
+    final ux = dx / d;
+    final uy = dy / d;
+
+    // Vektor normal tegak lurus garis baseline (90 derajat CCW)
+    final vx = -uy;
+    final vy = ux;
+
+    // Jarak proyeksi sepanjang baseline dari A1
+    // Menggunakan hukum cosinus / perpotongan dua lingkaran:
+    // r1^2 - p^2 = r2^2 - (d - p)^2  =>  p = (r1^2 - r2^2 + d^2) / (2*d)
+    var p = ((r1 * r1) - (r2 * r2) + (d * d)) / (2.0 * d);
+
+    // Ketinggian tegak lurus dari garis baseline: h^2 = r1^2 - p^2
+    final hSq = (r1 * r1) - (p * p);
+    double h = 0.0;
+    if (hSq > 0) {
+      h = sqrt(hSq);
+    } else {
+      // Lingkaran tidak berpotongan sempurna karena distorsi redaman sinyal RF di lapangan
+      // Proyeksikan ke titik terdekat pada garis baseline
+      p = p.clamp(0.0, d);
+      h = 0.0;
+    }
+
+    final sideMultiplier = surveySidePositive ? 1.0 : -1.0;
+
+    final solX = x1 + (p * ux) + (sideMultiplier * h * vx);
+    final solY = y1 + (p * uy) + (sideMultiplier * h * vy);
+    final solZ = baroZ ?? a1.z;
+
+    // Hitung residual error pada 2 patok
+    final distA1 = sqrt(pow(solX - x1, 2) + pow(solY - y1, 2));
+    final distA2 = sqrt(pow(solX - x2, 2) + pow(solY - y2, 2));
+    final err1 = (distA1 - r1).abs();
+    final err2 = (distA2 - r2).abs();
+    final residual = sqrt((err1 * err1 + err2 * err2) / 2.0);
+
+    return MultilaterationResult(
+      x: solX,
+      y: solY,
+      z: solZ,
+      residualError: residual,
+      isAccurate: residual < 3.5,
+      methodUsed: 'Trilaterasi 2-Base (Mode 3 HP) + Baro Altimetri',
+      activeAnchorCount: 2,
+    );
   }
 
   /// Exact 2D/2.5D Trilateration for 3 Anchors
@@ -123,6 +210,7 @@ class MultilaterationEngine {
       residualError: residual,
       isAccurate: residual < 3.0,
       methodUsed: 'Trilaterasi 3-Titik Linier + Baro Altimetri',
+      activeAnchorCount: 3,
     );
   }
 
@@ -192,6 +280,7 @@ class MultilaterationEngine {
       residualError: residual,
       isAccurate: residual < 2.5,
       methodUsed: 'Multilaterasi Kuadrat Terkecil (N=$n) + Fusi Baro',
+      activeAnchorCount: n,
     );
   }
 

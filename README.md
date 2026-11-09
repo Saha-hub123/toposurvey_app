@@ -1,31 +1,29 @@
-# 🏔️ TopoSurvey 3D: Alat Survey Topografi Berbasis Multi-Handphone Android
+# 🏔️ TopoSurvey 3D: Alat Survey Topografi Berbasis Multi-Handphone Android & iOS
 
-Aplikasi survey pemetaan topografi dan ketinggian kontur tanah menggunakan kolaborasi **minimal 3 handphone Android** dengan metode **Multilaterasi / Trilaterasi**, **BLE (Bluetooth Low Energy) Ranging**, dan **Diferensial Barometer Altimetri** untuk mengatasi keterbatasan GPS standar smartphone (akurasi 5–10 meter).
+Aplikasi survey pemetaan topografi dan ketinggian kontur tanah menggunakan kolaborasi **3 hingga 4 handphone (Android & iOS)** dengan metode **Multilaterasi / Trilaterasi Bilateral & Multititik**, **BLE (Bluetooth Low Energy) Ranging**, dan **Diferensial Barometer Altimetri** untuk mengatasi keterbatasan GPS standar smartphone (akurasi 5–10 meter).
 
 ---
 
-## 🌟 Mengapa Minimal 3 Handphone? (Latar Belakang Ilmiah)
+## 🌟 Dukungan Mode 3 HP & 4 HP (Latar Belakang Ilmiah)
 
-1. **Kelemahan GPS Tunggal Smartphone**:
+1. **Kelemahan GPS Tunggal Smartphone & Solusi Anti-Drift**:
    - Chipset GNSS/GPS bawaan HP memiliki ketidakpastian posisi horizontal sekitar **5 hingga 10 meter** akibat gangguan ionosfer dan pantulan sinyal (*multipath*).
-   - Ketidakpastian vertikal (ketinggian/elevasi) GPS bahkan lebih buruk, mencapai **15 hingga 30 meter**, sehingga **mustahil** digunakan untuk memetakan lereng, kontur, parit, atau terasering tanah secara akurat hanya dengan 1 HP.
+   - **Filter Anti-Drift Terpasang:** *Accuracy Threshold* (≤ 5m), *Minimum Displacement* (1m via `setSmallestDisplacement`), dan *Outlier Speed Rejection* (> 4.5 m/s) memastikan data GPS tidak melompat-lompat saat surveyor diam.
 
-2. **Solusi Multilaterasi / Trilaterasi Kooperatif**:
-   - **Handphone 1 (Anchor A / Base Origin)**: Diletakkan di patok acuan primer $(0, 0, Z_0)$ atau koordinat benchmark.
-   - **Handphone 2 (Anchor B / Sumbu X)**: Diletakkan di patok sumbu dasar $(d_{AB}, 0, Z_B)$.
-   - **Handphone 3 (Anchor C / Pembentuk Bidang)**: Diletakkan di patok ketiga $(X_C, Y_C, Z_C)$ membentuk segitiga bidang ukur.
-   - **Handphone 4 (atau Rover Mode)**: Dibawa oleh surveyor menggunakan jalon/tongkat ukur untuk menembak titik-titik permukaan tanah.
+2. **Dukungan Operasi Fleksibel (3 HP atau 4 HP)**:
+   - **Mode 3 HP (Minimalist Setup)**: 2 Handphone sebagai patok acuan (Base Station A di $(0,0)$ & Base Station B di sumbu X) + 1 Handphone sebagai Rover. Menggunakan algoritma interseksi lingkaran 2-titik bilateral dipadukan dengan barometer diferensial dan toggle kuadran sisi survei (+Y / -Y).
+   - **Mode 4 HP (Optimal 3D Setup)**: 3 Handphone sebagai patok acuan (Base A, B, dan C membentuk segitiga) + 1 Handphone sebagai Rover. Menggunakan trilaterasi kuadrat terkecil (*Least Squares*) untuk akurasi maksimal.
 
-3. **Penguatan Sinyal BLE (Bluetooth Low Energy)**:
-   - Menggunakan model *Log-Distance Path Loss*:
-     $$RSSI = -10 \cdot n \cdot \log_{10}(d) + A$$
-     $$d = 10^{\frac{A - RSSI}{10 \cdot n}}$$
-   - **Filter Kalman 1D** diterapkan secara *real-time* untuk membuang lonjakan fluktuasi radio (noise RF).
+3. **Proteksi Sinyal BLE & Perisai Perangkat Liar**:
+   - **Filter RSSI Cutoff**: Mengabaikan sinyal dengan $RSSI < -80\text{ dBm}$ (di luar radius efektif).
+   - **Whitelisting MAC Address**: Hanya memproses sinyal dari patok acuan yang terdaftar.
+   - **Validasi Advertising Payload**: Membaca paket telemetri biner khusus TopoSurvey 3D dan membuang paket liar (*promiscuous drop*).
+   - **Filter Kalman 1D Real-Time**: Membuang lonjakan fluktuasi radio RF secara adaptif.
 
 4. **Sensor Fusi Barometer Diferensial (Sub-Meter Vertical Accuracy)**:
    - Perubahan tekanan atmosfer dihitung menggunakan rumus hipso-metrik ISA:
      $$\Delta h = 44330.0 \times \left(1.0 - \left(\frac{P_{rover}}{P_{base}}\right)^{0.190295}\right)$$
-   - Karena Anchor A terus menyiarkan $P_{base}(t)$ secara langsung, pergeseran cuaca dan angin (*diurnal drift*) tereliminasi **100%**, menghasilkan resolusi beda tinggi permukaan tanah hingga **10–20 cm**!
+   - Karena Base Station terus menyiarkan $P_{base}(t)$ secara langsung, pergeseran cuaca dan angin (*diurnal drift*) tereliminasi **100%**, menghasilkan resolusi beda tinggi permukaan tanah hingga **10–20 cm**!
 
 ---
 

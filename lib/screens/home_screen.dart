@@ -10,6 +10,77 @@ import 'calibration_screen.dart';
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
+  void _showSimulationDialog(BuildContext context, SurveyState state) {
+    if (state.isSimulating) {
+      state.toggleSimulation();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mode Simulasi Dihentikan. Sistem kembali ke mode pembacaan sensor fisik asli.'),
+          backgroundColor: Colors.teal,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B2230),
+        title: const Row(
+          children: [
+            Icon(Icons.science, color: Colors.purpleAccent),
+            SizedBox(width: 10),
+            Text('Mode Simulasi Virtual', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Fitur ini dirancang KHUSUS untuk pengujian di komputer / emulator tanpa HP fisik.',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            SizedBox(height: 10),
+            Text(
+              '• Saat aktif: Sistem membuat koordinat virtual dan sinyal patok buatan agar Anda bisa mencoba tampilan peta kontur & tembak titik.\n\n'
+              '• Di lapangan nyata: JANGAN aktifkan fitur ini. HP Base dan Rover akan otomatis saling terhubung via radio BLE/Wi-Fi asli.',
+              style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.purpleAccent,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.play_arrow, size: 18),
+            label: const Text('Jalankan Simulasi (Demo)'),
+            onPressed: () {
+              Navigator.pop(ctx);
+              state.toggleSimulation();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Simulasi Topografi Aktif: Mengemulasi pergerakan Rover di kontur tanah',
+                  ),
+                  backgroundColor: Colors.purple,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<SurveyState>();
@@ -29,7 +100,7 @@ class HomeScreen extends StatelessWidget {
         ),
         actions: [
           IconButton(
-            tooltip: 'Kalibrasi BLE & Lingkungan',
+            tooltip: 'Kalibrasi & Filter Sinyal',
             icon: const Icon(Icons.tune, color: Colors.tealAccent),
             onPressed: () {
               Navigator.push(
@@ -38,25 +109,51 @@ class HomeScreen extends StatelessWidget {
               );
             },
           ),
-          IconButton(
-            tooltip: state.isSimulating ? 'Matikan Simulasi' : 'Jalankan Simulasi Lapangan',
-            icon: Icon(
-              state.isSimulating ? Icons.stop_circle : Icons.play_circle_fill,
-              color: state.isSimulating ? Colors.redAccent : Colors.tealAccent,
-            ),
-            onPressed: () {
-              state.toggleSimulation();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    state.isSimulating
-                        ? 'Simulasi Topografi Aktif: Mengemulasi pergerakan Rover di kontur tanah'
-                        : 'Simulasi Dihentikan',
+          // Tombol Mode Simulasi (Jelas bertuliskan SIMULASI agar tidak disangka tombol mulai kerja)
+          Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _showSimulationDialog(context, state),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: state.isSimulating
+                      ? Colors.purple.withOpacity(0.3)
+                      : const Color(0xFF1E2638),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: state.isSimulating
+                        ? Colors.purpleAccent
+                        : const Color(0xFF384560),
+                    width: 1.2,
                   ),
-                  duration: const Duration(seconds: 2),
                 ),
-              );
-            },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      state.isSimulating ? Icons.stop_circle : Icons.science,
+                      color: state.isSimulating
+                          ? Colors.purpleAccent
+                          : Colors.tealAccent,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      state.isSimulating ? 'STOP SIMULASI' : 'SIMULASI',
+                      style: TextStyle(
+                        color: state.isSimulating
+                            ? Colors.purpleAccent
+                            : Colors.tealAccent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -103,7 +200,7 @@ class HomeScreen extends StatelessWidget {
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          state.isSimulating ? 'SIMULASI AKTIF' : 'METODE 3+ HP',
+                          state.isSimulating ? 'SIMULASI AKTIF' : 'SIAP 3 HP / 4 HP',
                           style: TextStyle(
                             color: state.isSimulating
                                 ? Colors.purpleAccent
@@ -283,7 +380,7 @@ class HomeScreen extends StatelessWidget {
                       Icon(Icons.hub, color: Colors.tealAccent, size: 20),
                       SizedBox(width: 8),
                       Text(
-                        'Konfigurasi 3 Base Station (Anchors)',
+                        'Konfigurasi Base Station (Mendukung 3 HP / 4 HP)',
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -306,7 +403,7 @@ class HomeScreen extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              '(${a.x.toStringAsFixed(1)}, ${a.y.toStringAsFixed(1)}, Z=${a.z.toStringAsFixed(1)}m)',
+                              '(${a.x.toStringAsFixed(1)}, ${a.y.toStringAsFixed(1)}, Z=${a.z.toStringAsFixed(1)}m)${a.macAddress != null ? " [MAC]" : ""}',
                               style: const TextStyle(
                                 color: Colors.tealAccent,
                                 fontFamily: 'monospace',

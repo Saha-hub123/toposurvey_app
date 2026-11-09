@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart';
 import '../models/anchor_node.dart';
 import '../models/survey_point.dart';
 import '../services/multilateration_engine.dart';
 import '../services/ble_ranging_service.dart';
 import '../services/barometer_elevation_service.dart';
 import '../services/mesh_network_service.dart';
+import '../services/gps_location_service.dart';
 
 enum DeviceRole { rover, anchor }
 
@@ -16,6 +16,7 @@ class SurveyState extends ChangeNotifier {
   final BleRangingService _bleService = BleRangingService();
   final BarometerElevationService _baroService = BarometerElevationService();
   final MeshNetworkService _meshService = MeshNetworkService();
+  final GpsLocationService _gpsService = GpsLocationService();
 
   // Role & Configuration
   DeviceRole _currentRole = DeviceRole.rover;
@@ -23,7 +24,10 @@ class SurveyState extends ChangeNotifier {
   String _projectName = 'Survey Topografi Lahan 01';
   String _surveyorName = 'Tim Surveyor';
 
-  // Anchors State (At least 3 anchors required)
+  // Kuadran survei untuk mode 2 Base (3 HP): Sisi Depan (+Y) atau Belakang (-Y) terhadap baseline A-B
+  bool _surveySidePositive = true;
+
+  // Anchors State (Default 3 anchors, but works with 2 anchors for 3-HP setup)
   final List<AnchorNode> _anchors = [
     AnchorNode(
       id: 'ANCHOR_A',
@@ -32,6 +36,7 @@ class SurveyState extends ChangeNotifier {
       y: 0.0,
       z: 100.0,
       pressureHpa: 1013.25,
+      macAddress: null,
     ),
     AnchorNode(
       id: 'ANCHOR_B',
@@ -40,6 +45,7 @@ class SurveyState extends ChangeNotifier {
       y: 0.0,
       z: 100.2,
       pressureHpa: 1013.23,
+      macAddress: null,
     ),
     AnchorNode(
       id: 'ANCHOR_C',
@@ -48,6 +54,7 @@ class SurveyState extends ChangeNotifier {
       y: 18.0,
       z: 99.8,
       pressureHpa: 1013.28,
+      macAddress: null,
     ),
   ];
 
@@ -70,12 +77,14 @@ class SurveyState extends ChangeNotifier {
   StreamSubscription? _baroSub;
   StreamSubscription? _meshAnchorSub;
   StreamSubscription? _meshPointSub;
+  StreamSubscription? _gpsSub;
 
   // Getters
   DeviceRole get currentRole => _currentRole;
   String get selectedAnchorId => _selectedAnchorId;
   String get projectName => _projectName;
   String get surveyorName => _surveyorName;
+  bool get surveySidePositive => _surveySidePositive;
   List<AnchorNode> get anchors => List.unmodifiable(_anchors);
   List<SurveyPoint> get surveyPoints => List.unmodifiable(_surveyPoints);
   Map<String, double> get liveDistances => _liveDistances;
@@ -88,6 +97,20 @@ class SurveyState extends ChangeNotifier {
   double get txPowerAt1m => _bleService.txPowerAt1m;
   double get pathLossExponent => _bleService.pathLossExponent;
   bool get isBarometerAvailable => _baroService.isSensorAvailable;
+
+  // GPS Service & Filter Getters
+  GpsLocationService get gpsService => _gpsService;
+  double get gpsAccuracyThreshold => _gpsService.accuracyThreshold;
+  double get gpsMinDisplacement => _gpsService.minDisplacement;
+  double get gpsMaxSpeed => _gpsService.maxSpeedThreshold;
+  GpsFilterStats get gpsStats => _gpsService.stats;
+
+  // BLE Service & Filter Getters
+  BleRangingService get bleService => _bleService;
+  double get bleMinRssiThreshold => _bleService.minRssiThreshold;
+  bool get bleEnforceMacWhitelist => _bleService.enforceMacWhitelist;
+  bool get bleStrictPayloadValidation => _bleService.strictPayloadValidation;
+  BleScanFilterStats get bleFilterStats => _bleService.filterStats;
 
   SurveyState() {
     _initServices();
@@ -124,6 +147,13 @@ class SurveyState extends ChangeNotifier {
         notifyListeners();
       }
     });
+
+    // Initial sync of anchor MAC whitelisting
+    for (final a in _anchors) {
+      if (a.macAddress != null && a.macAddress!.isNotEmpty) {
+        _bleService.setMacWhitelist(a.id, a.macAddress!);
+      }
+    }
   }
 
   void setRole(DeviceRole role) {
@@ -151,6 +181,18 @@ class SurveyState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setSurveySidePositive(bool positive) {
+    _surveySidePositive = positive;
+    _computeLiveRoverPosition();
+    notifyListeners();
+  }
+
+  void toggleSurveySide() {
+    _surveySidePositive = !_surveySidePositive;
+    _computeLiveRoverPosition();
+    notifyListeners();
+  }
+
   void setProjectDetails({required String name, required String surveyor}) {
     _projectName = name;
     _surveyorName = surveyor;
@@ -161,6 +203,58 @@ class SurveyState extends ChangeNotifier {
     _bleService.txPowerAt1m = txPower;
     _bleService.pathLossExponent = exponent;
     notifyListeners();
+  }
+
+  /// Konfigurasi filter GPS (Accuracy Threshold, Smallest Displacement, Outlier Speed)
+  void setGpsFilterSettings({
+    double? accuracyThreshold,
+    double? minDisplacement,
+    double? maxSpeedThreshold,
+  }) {
+    if (accuracyThreshold != null) {
+      _gpsService.accuracyThreshold = accuracyThreshold;
+    }
+    if (minDisplacement != null) {
+      _gpsService.minDisplacement = minDisplacement;
+    }
+    if (maxSpeedThreshold != null) {
+      _gpsService.maxSpeedThreshold = maxSpeedThreshold;
+    }
+    notifyListeners();
+  }
+
+  /// Konfigurasi filter BLE (RSSI cutoff, Whitelisting, Payload Parser)
+  void setBleFilterSettings({
+    double? minRssiThreshold,
+    bool? enforceMacWhitelist,
+    bool? strictPayloadValidation,
+  }) {
+    if (minRssiThreshold != null) {
+      _bleService.minRssiThreshold = minRssiThreshold;
+    }
+    if (enforceMacWhitelist != null) {
+      _bleService.enforceMacWhitelist = enforceMacWhitelist;
+    }
+    if (strictPayloadValidation != null) {
+      _bleService.strictPayloadValidation = strictPayloadValidation;
+    }
+    notifyListeners();
+  }
+
+  void updateAnchorMacAddress(String anchorId, String? macAddress) {
+    final index = _anchors.indexWhere((a) => a.id == anchorId);
+    if (index >= 0) {
+      final cleanMac = macAddress?.trim().toUpperCase();
+      _anchors[index] = _anchors[index].copyWith(
+        macAddress: cleanMac != null && cleanMac.isNotEmpty ? cleanMac : null,
+      );
+      if (cleanMac != null && cleanMac.isNotEmpty) {
+        _bleService.setMacWhitelist(anchorId, cleanMac);
+      } else {
+        _bleService.removeMacWhitelist(anchorId);
+      }
+      notifyListeners();
+    }
   }
 
   Future<void> startSurvey() async {
@@ -185,16 +279,26 @@ class SurveyState extends ChangeNotifier {
     required double y,
     required double z,
     String? name,
+    String? macAddress,
   }) {
     final index = _anchors.indexWhere((a) => a.id == id);
     if (index >= 0) {
+      final cleanMac = macAddress?.trim().toUpperCase();
       _anchors[index] = _anchors[index].copyWith(
         x: x,
         y: y,
         z: z,
         name: name,
+        macAddress: cleanMac != null && cleanMac.isNotEmpty
+            ? cleanMac
+            : _anchors[index].macAddress,
         lastSeen: DateTime.now(),
       );
+
+      if (cleanMac != null && cleanMac.isNotEmpty) {
+        _bleService.setMacWhitelist(id, cleanMac);
+      }
+
       _computeLiveRoverPosition();
       notifyListeners();
     }
@@ -211,11 +315,17 @@ class SurveyState extends ChangeNotifier {
         latitude: synced.latitude,
         longitude: synced.longitude,
         pressureHpa: synced.pressureHpa,
+        macAddress: synced.macAddress ?? _anchors[index].macAddress,
         lastSeen: DateTime.now(),
       );
     } else {
       _anchors.add(synced);
     }
+
+    if (synced.macAddress != null && synced.macAddress!.isNotEmpty) {
+      _bleService.setMacWhitelist(synced.id, synced.macAddress!);
+    }
+
     _computeLiveRoverPosition();
     notifyListeners();
   }
@@ -243,10 +353,12 @@ class SurveyState extends ChangeNotifier {
 
   void _computeLiveRoverPosition() {
     final diffZ = _computeDifferentialElevation();
+    // Mendukung 2 Anchor (Mode 3 HP) maupun 3+ Anchor (Mode 4 HP)
     _currentPositionResult = MultilaterationEngine.solve(
       anchors: _anchors,
       measuredDistances: _liveDistances,
       differentialElevationZ: diffZ,
+      surveySidePositive: _surveySidePositive,
     );
   }
 
@@ -330,28 +442,25 @@ class SurveyState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Auto-assign GPS coordinates to an anchor from current phone location
+  /// Auto-assign GPS coordinates to an anchor from current phone location,
+  /// with strict filtering (Accuracy <= 5m, Outlier rejection, Displacement filter)
   Future<bool> calibrateAnchorFromGps(String anchorId) async {
     try {
-      final permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        final req = await Geolocator.requestPermission();
-        if (req == LocationPermission.denied ||
-            req == LocationPermission.deniedForever) {
-          return false;
-        }
-      }
-
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best),
+      final accuratePos = await _gpsService.getAccuratePosition(
+        timeout: const Duration(seconds: 10),
       );
+
+      if (accuratePos == null) {
+        // GPS fix ditolak karena akurasi buruk (> 5.0m) atau timeout
+        return false;
+      }
 
       final index = _anchors.indexWhere((a) => a.id == anchorId);
       if (index >= 0) {
         _anchors[index] = _anchors[index].copyWith(
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-          z: pos.altitude != 0.0 ? pos.altitude : _anchors[index].z,
+          latitude: accuratePos.latitude,
+          longitude: accuratePos.longitude,
+          z: accuratePos.altitude != 0.0 ? accuratePos.altitude : _anchors[index].z,
         );
         notifyListeners();
         return true;
@@ -361,7 +470,8 @@ class SurveyState extends ChangeNotifier {
   }
 
   /// Field simulation mode: simulates walking a topographic terrain grid
-  void toggleSimulation() {
+  /// Also works seamlessly in 3-HP mode (Base A and Base B only) or full 3-base setup
+  void toggleSimulation({bool simulate3HpMode = false}) {
     _isSimulating = !_isSimulating;
     if (_isSimulating) {
       double angle = 0.0;
@@ -377,8 +487,12 @@ class SurveyState extends ChangeNotifier {
         // Theoretical pressure for this elevation (approx -0.12 hPa per meter)
         _liveRoverPressure = 1013.25 - ((simZ - 100.0) * 0.12);
 
-        // Compute simulated distances to anchors A, B, C
-        for (final anchor in _anchors) {
+        // Compute simulated distances to anchors
+        final targetAnchors = simulate3HpMode
+            ? _anchors.where((a) => a.id == 'ANCHOR_A' || a.id == 'ANCHOR_B').toList()
+            : _anchors;
+
+        for (final anchor in targetAnchors) {
           final dist = anchor.distanceTo(simX, simY, simZ);
           _bleService.injectSimulatedSample(anchor.id, dist);
         }
@@ -396,10 +510,12 @@ class SurveyState extends ChangeNotifier {
     _baroSub?.cancel();
     _meshAnchorSub?.cancel();
     _meshPointSub?.cancel();
+    _gpsSub?.cancel();
     _simulationTimer?.cancel();
     _bleService.dispose();
     _baroService.dispose();
     _meshService.dispose();
+    _gpsService.dispose();
     super.dispose();
   }
 }
