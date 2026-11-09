@@ -49,7 +49,7 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Belum mendapatkan fix trilaterasi! Pastikan minimal 3 Anchor terhubung.',
+            'Belum mendapatkan fix trilaterasi! Pastikan minimal 2 Base Station (Mode 3 HP) atau 3 Base terhubung.',
           ),
           backgroundColor: Colors.redAccent,
         ),
@@ -66,7 +66,7 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Titik #${point.pointNumber} [$_selectedCode] Z=${point.z.toStringAsFixed(2)}m tersimpan!',
+            'Titik #${point.pointNumber} [$_selectedCode] Z=${point.z.toStringAsFixed(2)}m tersimpan! (${point.calculationMethod})',
           ),
           backgroundColor: Colors.teal,
           duration: const Duration(seconds: 1),
@@ -81,6 +81,7 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
     final state = context.watch<SurveyState>();
     final pos = state.currentPositionResult;
     final anchorA = state.anchors.firstWhere((a) => a.id == 'ANCHOR_A');
+    final filterStats = state.bleFilterStats;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F131D),
@@ -104,6 +105,46 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Banner Peringatan Mode Simulasi (Muncul jika Simulasi diaktifkan)
+            if (state.isSimulating)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.purpleAccent.withOpacity(0.6)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.science, color: Colors.purpleAccent, size: 18),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'MODE SIMULASI VIRTUAL AKTIF (Data Tiruan Emulator)',
+                        style: TextStyle(
+                          color: Colors.purpleAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      onPressed: () => state.toggleSimulation(),
+                      child: const Text('Matikan',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11)),
+                    ),
+                  ],
+                ),
+              ),
+
             // Live Elevation & Coordinates Banner
             Container(
               padding: const EdgeInsets.all(18),
@@ -153,8 +194,10 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
                         ),
                         child: Text(
                           pos != null
-                              ? 'Akurasi: ±${pos.residualError.toStringAsFixed(2)}m'
-                              : 'Menunggu 3 Anchor...',
+                              ? (pos.activeAnchorCount == 2
+                                  ? 'Mode 3 HP (2-Base): ±${pos.residualError.toStringAsFixed(2)}m'
+                                  : 'Akurasi: ±${pos.residualError.toStringAsFixed(2)}m')
+                              : 'Menunggu min. 2 Base...',
                           style: TextStyle(
                             color: pos != null && pos.isAccurate
                                 ? Colors.greenAccent
@@ -246,10 +289,98 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
                       ),
                     ],
                   ),
+
+                  // Mode 3 HP Quick Toggle for Survey Side (Positive / Negative quadrant)
+                  if (pos != null && pos.activeAnchorCount == 2) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF131722),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: Colors.tealAccent.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.explore,
+                                  color: Colors.tealAccent, size: 16),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Sisi Garis Baseline A-B: ${state.surveySidePositive ? "Kanan / Depan (+Y)" : "Kiri / Belakang (-Y)"}',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                          InkWell(
+                            onTap: () => state.toggleSurveySide(),
+                            borderRadius: BorderRadius.circular(4),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.tealAccent.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.swap_horiz,
+                                      color: Colors.tealAccent, size: 14),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Tukar',
+                                    style: TextStyle(
+                                      color: Colors.tealAccent,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
+
+            // Active Filter & Noise Shield Banner
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF121620),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF232D3F)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.security, color: Colors.tealAccent, size: 14),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Proteksi Sinyal: RSSI ≥ ${state.bleMinRssiThreshold.toInt()} dBm | Dibuang: ${filterStats.droppedWeakRssiCount} lemah, ${filterStats.droppedInvalidPayloadCount + filterStats.droppedNonWhitelistedCount} asing',
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 10,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
 
             // Feature Code Picker
             const Text(
@@ -326,7 +457,7 @@ class _RoverSurveyScreenState extends State<RoverSurveyScreen> {
             ),
             const SizedBox(height: 18),
 
-            // Signal Strength of 3+ Anchors
+            // Signal Strength of Anchors (supports 2+ Anchors)
             SignalStrengthMeter(
               anchors: state.anchors,
               liveDistances: state.liveDistances,

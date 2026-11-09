@@ -14,6 +14,8 @@ class _AnchorScreenState extends State<AnchorScreen> {
   late TextEditingController _xController;
   late TextEditingController _yController;
   late TextEditingController _zController;
+  late TextEditingController _macController;
+  bool _isCalibratingGps = false;
 
   @override
   void initState() {
@@ -28,6 +30,7 @@ class _AnchorScreenState extends State<AnchorScreen> {
     _xController = TextEditingController(text: anchor.x.toStringAsFixed(2));
     _yController = TextEditingController(text: anchor.y.toStringAsFixed(2));
     _zController = TextEditingController(text: anchor.z.toStringAsFixed(2));
+    _macController = TextEditingController(text: anchor.macAddress ?? '');
   }
 
   void _loadAnchorData(String anchorId) {
@@ -41,6 +44,7 @@ class _AnchorScreenState extends State<AnchorScreen> {
     _xController.text = anchor.x.toStringAsFixed(2);
     _yController.text = anchor.y.toStringAsFixed(2);
     _zController.text = anchor.z.toStringAsFixed(2);
+    _macController.text = anchor.macAddress ?? '';
   }
 
   void _saveCoordinates(SurveyState state) {
@@ -48,6 +52,7 @@ class _AnchorScreenState extends State<AnchorScreen> {
     final y = double.tryParse(_yController.text) ?? 0.0;
     final z = double.tryParse(_zController.text) ?? 100.0;
     final name = _nameController.text.trim();
+    final mac = _macController.text.trim();
 
     state.updateAnchorCoordinates(
       state.selectedAnchorId,
@@ -55,12 +60,13 @@ class _AnchorScreenState extends State<AnchorScreen> {
       y: y,
       z: z,
       name: name.isNotEmpty ? name : null,
+      macAddress: mac.isNotEmpty ? mac : null,
     );
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Koordinat ${state.selectedAnchorId} diperbarui: ($x, $y, $z)',
+          'Konfigurasi ${state.selectedAnchorId} diperbarui: ($x, $y, $z) ${mac.isNotEmpty ? "[MAC: $mac]" : ""}',
         ),
         backgroundColor: Colors.teal,
       ),
@@ -73,6 +79,7 @@ class _AnchorScreenState extends State<AnchorScreen> {
     _xController.dispose();
     _yController.dispose();
     _zController.dispose();
+    _macController.dispose();
     super.dispose();
   }
 
@@ -274,6 +281,22 @@ class _AnchorScreenState extends State<AnchorScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+
+            // MAC Address Whitelisting Field
+            TextField(
+              controller: _macController,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: const InputDecoration(
+                labelText: 'BLE MAC Address Patok (Whitelisting Anti-HP Asing)',
+                hintText: 'Misal: AA:BB:CC:11:22:33 (Opsional)',
+                labelStyle: TextStyle(color: Colors.white70),
+                hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                filled: true,
+                fillColor: Color(0xFF161B26),
+                prefixIcon: Icon(Icons.fingerprint, color: Colors.tealAccent, size: 20),
+              ),
+            ),
             const SizedBox(height: 14),
 
             // Auto GPS Button & Save
@@ -286,25 +309,50 @@ class _AnchorScreenState extends State<AnchorScreen> {
                       side: const BorderSide(color: Colors.tealAccent),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    icon: const Icon(Icons.my_location,
-                        color: Colors.tealAccent),
-                    label: const Text('Ambil GPS Patok Ini'),
-                    onPressed: () async {
-                      final messenger = ScaffoldMessenger.of(context);
-                      final ok = await state
-                          .calibrateAnchorFromGps(state.selectedAnchorId);
-                      if (!mounted) return;
-                      if (ok) {
-                        _loadAnchorData(state.selectedAnchorId);
-                        messenger.showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                                'Koordinat GPS & Ketinggian berhasil dicatat ke Patok!'),
-                            backgroundColor: Colors.teal,
-                          ),
-                        );
-                      }
-                    },
+                    icon: _isCalibratingGps
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.tealAccent,
+                            ),
+                          )
+                        : const Icon(Icons.my_location,
+                            color: Colors.tealAccent),
+                    label: Text(_isCalibratingGps
+                        ? 'Menyaring GPS...'
+                        : 'Ambil GPS Terfilter (≤5m)'),
+                    onPressed: _isCalibratingGps
+                        ? null
+                        : () async {
+                            setState(() => _isCalibratingGps = true);
+                            final messenger = ScaffoldMessenger.of(context);
+                            final ok = await state
+                                .calibrateAnchorFromGps(state.selectedAnchorId);
+                            if (!mounted) return;
+                            setState(() => _isCalibratingGps = false);
+
+                            if (ok) {
+                              _loadAnchorData(state.selectedAnchorId);
+                              messenger.showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Koordinat GPS tervalidasi presisi (≤ 5m) berhasil dicatat ke Patok!'),
+                                  backgroundColor: Colors.teal,
+                                ),
+                              );
+                            } else {
+                              messenger.showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Sinyal GPS belum cukup akurat (akurasi > 5m) atau mengalami drift. Pastikan surveyor berdiri diam di patok dengan pandangan langit terbuka, lalu coba lagi.'),
+                                  backgroundColor: Colors.orangeAccent,
+                                  duration: Duration(seconds: 4),
+                                ),
+                              );
+                            }
+                          },
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -327,7 +375,7 @@ class _AnchorScreenState extends State<AnchorScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Field Instruction Card
+            // Field Instruction Card (Mode 3 HP & 4 HP)
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -340,11 +388,11 @@ class _AnchorScreenState extends State<AnchorScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.info_outline,
+                      Icon(Icons.tips_and_updates,
                           color: Colors.tealAccent, size: 18),
                       SizedBox(width: 8),
                       Text(
-                        'Petunjuk Penggelaran 3 HP di Lapangan:',
+                        'Petunjuk Penggelaran di Lapangan:',
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -353,13 +401,40 @@ class _AnchorScreenState extends State<AnchorScreen> {
                       ),
                     ],
                   ),
-                  SizedBox(height: 8),
+                  SizedBox(height: 10),
                   Text(
-                    '1. Letakkan HP 1 sebagai Base A (Origin 0,0, Z acuan).\n'
-                    '2. Letakkan HP 2 sebagai Base B (misal 15m ke timur).\n'
-                    '3. Letakkan HP 3 sebagai Base C (misal 15m ke utara membentuk segitiga).\n'
-                    '4. Hidupkan Portable Hotspot pada salah satu HP agar ketiga HP saling terhubung secara offline.\n'
-                    '5. Bawa HP ke-4 (atau Rover) untuk menembak titik-titik kontur permukaan.',
+                    'SKENARIO A: HANYA MEMILIKI 3 HP (MODE 3 HP AKTIF)',
+                    style: TextStyle(
+                      color: Colors.tealAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    '1. HP 1: Set sebagai Base A (Origin 0,0, acuan elevasi Z).\n'
+                    '2. HP 2: Set sebagai Base B (misal 15m ke timur sebagai garis baseline X).\n'
+                    '3. HP 3: Bawa sebagai Rover pengukur kontur tanah.\n'
+                    '-> Sistem otomatis menyelesaikan trilaterasi 2-patok bilateral + altimetri barometrik tanpa perlu HP ke-4!',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    'SKENARIO B: MEMILIKI 4+ HP (MODE OPTIMAL)',
+                    style: TextStyle(
+                      color: Colors.tealAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    '1. Pasang HP 1 (Base A), HP 2 (Base B), HP 3 (Base C) membentuk segitiga di sekeliling area.\n'
+                    '2. Bawa HP ke-4 sebagai Rover untuk menjelajah dan menembak titik.',
                     style: TextStyle(
                       color: Colors.white70,
                       fontSize: 11,

@@ -15,6 +15,18 @@ class SignalStrengthMeter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final activeCount = liveDistances.length;
+    final isReadyForSurvey = activeCount >= 2;
+
+    String statusText;
+    if (activeCount >= 3) {
+      statusText = '$activeCount/${anchors.length} Base (Optimal)';
+    } else if (activeCount == 2) {
+      statusText = '2 Base (Mode 3 HP Aktif)';
+    } else {
+      statusText = '$activeCount/${anchors.length} Terhubung';
+    }
+
     return Card(
       color: const Color(0xFF1E222D),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -33,7 +45,7 @@ class SignalStrengthMeter extends StatelessWidget {
                         color: Colors.tealAccent, size: 18),
                     SizedBox(width: 8),
                     Text(
-                      'Sinyal Trilaterasi BLE (3+ Handphone)',
+                      'Sinyal Patok Base BLE',
                       style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -42,14 +54,30 @@ class SignalStrengthMeter extends StatelessWidget {
                     ),
                   ],
                 ),
-                Text(
-                  '${liveDistances.length}/${anchors.length} Terhubung',
-                  style: TextStyle(
-                    color: liveDistances.length >= 3
-                        ? Colors.greenAccent
-                        : Colors.orangeAccent,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isReadyForSurvey
+                        ? Colors.green.withOpacity(0.18)
+                        : Colors.orange.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: isReadyForSurvey
+                          ? Colors.greenAccent.withOpacity(0.4)
+                          : Colors.orangeAccent.withOpacity(0.4),
+                      width: 0.8,
+                    ),
+                  ),
+                  child: Text(
+                    statusText,
+                    style: TextStyle(
+                      color: isReadyForSurvey
+                          ? Colors.greenAccent
+                          : Colors.orangeAccent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -96,7 +124,7 @@ class SignalStrengthMeter extends StatelessWidget {
                     Expanded(
                       flex: 3,
                       child: Text(
-                        anchor.id,
+                        anchor.id.replaceAll('ANCHOR_', 'BASE '),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,

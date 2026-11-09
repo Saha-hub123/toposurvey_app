@@ -14,6 +14,7 @@ class AnchorNode {
   DateTime lastSeen;
   double? currentRssi; // Live RSSI observed by rover
   double? filteredDistance; // Kalman filtered distance in meters
+  final String? macAddress; // Optional Whitelisted MAC address / BLE hardware ID
 
   AnchorNode({
     required this.id,
@@ -27,6 +28,7 @@ class AnchorNode {
     DateTime? lastSeen,
     this.currentRssi,
     this.filteredDistance,
+    this.macAddress,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
   Map<String, dynamic> toJson() => {
@@ -39,6 +41,7 @@ class AnchorNode {
         'longitude': longitude,
         'pressureHpa': pressureHpa,
         'lastSeen': lastSeen.toIso8601String(),
+        'macAddress': macAddress,
       };
 
   factory AnchorNode.fromJson(Map<String, dynamic> json) => AnchorNode(
@@ -53,6 +56,7 @@ class AnchorNode {
         lastSeen: json['lastSeen'] != null
             ? DateTime.tryParse(json['lastSeen'] as String)
             : null,
+        macAddress: json['macAddress'] as String?,
       );
 
   AnchorNode copyWith({
@@ -67,6 +71,7 @@ class AnchorNode {
     DateTime? lastSeen,
     double? currentRssi,
     double? filteredDistance,
+    String? macAddress,
   }) {
     return AnchorNode(
       id: id ?? this.id,
@@ -80,6 +85,7 @@ class AnchorNode {
       lastSeen: lastSeen ?? this.lastSeen,
       currentRssi: currentRssi ?? this.currentRssi,
       filteredDistance: filteredDistance ?? this.filteredDistance,
+      macAddress: macAddress ?? this.macAddress,
     );
   }
 

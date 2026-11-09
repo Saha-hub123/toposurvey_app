@@ -6,6 +6,8 @@ import '../models/survey_point.dart';
 
 class MeshNetworkService {
   static const int meshPort = 8888;
+  static const String protocolSignature = 'TOPOSURVEY_3D_V1';
+
   RawDatagramSocket? _socket;
   Timer? _heartbeatTimer;
   bool _isRunning = false;
@@ -39,7 +41,7 @@ class MeshNetworkService {
     }
   }
 
-  /// Handle incoming packet from peer Android phones
+  /// Handle incoming packet from peer Android phones with payload validation
   void _handleIncomingDatagram(RawSocketEvent event) {
     if (event == RawSocketEvent.read && _socket != null) {
       final datagram = _socket!.receive();
@@ -48,9 +50,21 @@ class MeshNetworkService {
       try {
         final message = utf8.decode(datagram.data);
         final json = jsonDecode(message) as Map<String, dynamic>;
+
+        // Validasi signature protokol untuk membuang paket asing dari HP lain / traffic Wi-Fi liar
+        final protocol = json['proto'] as String?;
+        if (protocol != null && protocol != protocolSignature) {
+          return; // Paket Wi-Fi asing
+        }
         final type = json['type'] as String?;
 
+        // Validasi tipe dan struktur paket TopoSurvey
         if (type == 'ANCHOR_HEARTBEAT') {
+          // Validasi kelengkapan data jangkar
+          if (json['id'] == null || json['x'] == null || json['y'] == null) {
+            return;
+          }
+
           final anchor = AnchorNode(
             id: json['id'] as String,
             name: json['name'] as String? ?? json['id'] as String,
@@ -60,20 +74,23 @@ class MeshNetworkService {
             latitude: (json['lat'] as num?)?.toDouble(),
             longitude: (json['lon'] as num?)?.toDouble(),
             pressureHpa: (json['pressureHpa'] as num?)?.toDouble(),
+            macAddress: json['mac'] as String?,
             lastSeen: DateTime.now(),
           );
           _anchorStreamController.add(anchor);
         } else if (type == 'SURVEY_POINT_SYNC') {
-          final point = SurveyPoint.fromJson(json['point'] as Map<String, dynamic>);
-          _pointStreamController.add(point);
+          if (json['point'] is Map<String, dynamic>) {
+            final point = SurveyPoint.fromJson(json['point'] as Map<String, dynamic>);
+            _pointStreamController.add(point);
+          }
         }
       } catch (_) {
-        // Ignore malformed packets
+        // Drop malformed / foreign packets
       }
     }
   }
 
-  /// Broadcast Anchor status (ID, Coordinates, Barometer reading) every 500ms
+  /// Broadcast Anchor status (ID, Coordinates, Barometer reading, MAC) every 600ms
   void startAnchorBroadcast(AnchorNode anchor) {
     stopBroadcast();
     _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 600), (_) {
@@ -86,6 +103,7 @@ class MeshNetworkService {
     if (_socket == null || !_isRunning) return;
 
     final payload = jsonEncode({
+      'proto': protocolSignature,
       'type': 'ANCHOR_HEARTBEAT',
       'id': anchor.id,
       'name': anchor.name,
@@ -95,12 +113,12 @@ class MeshNetworkService {
       'lat': anchor.latitude,
       'lon': anchor.longitude,
       'pressureHpa': anchor.pressureHpa,
+      'mac': anchor.macAddress,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
 
     final data = utf8.encode(payload);
     try {
-      // Broadcast to standard IPv4 subnet broadcast address
       _socket!.send(
         data,
         InternetAddress('255.255.255.255'),
@@ -114,6 +132,7 @@ class MeshNetworkService {
     if (_socket == null || !_isRunning) return;
 
     final payload = jsonEncode({
+      'proto': protocolSignature,
       'type': 'SURVEY_POINT_SYNC',
       'point': point.toJson(),
     });

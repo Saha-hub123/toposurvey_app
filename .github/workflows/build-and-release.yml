@@ -41,8 +41,8 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             RELEASE_TAG="${GITHUB_REF#refs/tags/}"
           else
-            # Automatic semantic versioning: v1.1.<run_number>
-            RELEASE_TAG="v1.1.${{ github.run_number }}"
+            # Automatic semantic versioning: v1.2.<run_number>
+            RELEASE_TAG="v1.2.${{ github.run_number }}"
             echo "Auto-creating git tag: $RELEASE_TAG"
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -199,27 +199,39 @@ jobs:
           tag_name: ${{ needs.generate-tag.outputs.tag_name }}
           name: "TopoSurvey Release ${{ needs.generate-tag.outputs.tag_name }}"
           body: |
-            ## 🏔️ TopoSurvey 3D - Multi-Phone Topographic Surveying & Contour Mapping
+            ## 🏔️ TopoSurvey 3D - Multi-Phone Topographic Surveying & Contour Mapping (v1.2.0)
 
-            Rilis resmi terbaru aplikasi **TopoSurvey** dengan pembaruan besar: **Mesin Pembangkit Peta Garis Kontur Halus (IDW + Marching Squares)**, **Fitur Impor Berkas (CSV / GeoJSON)**, dan **Koreksi Proyeksi Geodesi WGS84 Otomatis**.
+            Rilis resmi **TopoSurvey v1.2.0** menghadirkan pembaruan kritis stabilitas lapangan: **Patch Anti-Drift & Scattering GPS**, **Proteksi Sensor BLE Anti-Perangkat Asing**, **Dukungan Operasi Fleksibel Mode 3 HP (2 Base + 1 Rover)**, dan **Penyimpanan Pengaturan Persisten**.
 
-            Aplikasi ini mendukung kolaborasi survei lapangan **Multi-Handphone (Android & iPhone)** dengan sinkronisasi jaringan lokal Wi-Fi Hotspot P2P (UDP Mesh), BLE Ranging, dan koreksi beda tinggi Barometer diferensial sub-meter.
+            Aplikasi ini dirancang untuk pemetaan topografi kontur lahan menggunakan kolaborasi smartphone (Android & iOS) dengan trilaterasi radio BLE, altimetri barometer diferensial presisi tinggi, dan sinkronisasi Wi-Fi Hotspot P2P (UDP Mesh).
 
             ---
 
-            ### 🚀 Fitur Baru & Peningkatan:
-            1. **Mesin Garis Kontur Otomatis (*Contour Lines Engine*):**
-               - Menggunakan interpolasi permukaan **Inverse Distance Weighting (IDW)** dan **Marching Squares**.
-               - Menghasilkan kurva garis kontur nyata dengan pemisahan **Garis Mayor (Indeks / Tebal + Label Angka Ketinggian)** dan **Garis Minor (Tipis)**.
-               - Selector interval kontur instan di layar peta: `0.2m`, `0.5m`, `1.0m`, dan `2.0m`.
-               - Toggle lapisan: Tampilkan/sembunyikan garis kontur, titik ukur, atau label.
-            2. **Fitur Impor Data Survei Eksternal:**
-               - Mendukung import berkas **`.csv`**, **`.geojson`**, **`.json`**, dan **`.txt`** langsung dari memori perangkat.
-               - Pilihan integrasi: **"Gabungkan (Append)"** atau **"Ganti Data Lama (Replace)"**.
-            3. **Koreksi Otomatis Proyeksi Koordinat Geodesi:**
-               - Mengonversi pergeseran meter lokal $(X, Y)$ ke koordinat GPS absolut dunia nyata $(Lat, Lon)$ di sekitar Base Station A, sehingga ekspor GeoJSON dan CSV 100% akurat saat dibuka di Google Earth, Kepler.gl, QGIS, atau AutoCAD.
-            4. **Tampilan Antarmuka Responsif (Bebas Overflow):**
-               - Bilah kontrol dan legenda ramah semua ukuran layar smartphone.
+            ### 🚀 Fitur Baru & Perbaikan Kritis di v1.2.0:
+            1. **Modul Lokasi & GPS Anti-Drift (Solusi Titik Melompat/Menyebar):**
+               - **Accuracy Threshold Filter (≤ 5.0m):** Mengabaikan pembaruan lokasi jika radius ketidakpastian GPS melebihi standar toleransi survei.
+               - **Minimum Displacement (1.0m):** Mencegah penumpukan data (*drift scattering*) saat surveyor sedang diam di satu titik (`setSmallestDisplacement(1.0f)`).
+               - **Outlier Rejection:** Mendeteksi kecepatan pergerakan tidak wajar (> 4.5 m/s) atau lonjakan jarak ekstrem dalam hitungan detik untuk dibuang dari perhitungan.
+               - **Live Stream Tracking:** Sinkronisasi GPS otomatis untuk geo-referencing titik ukur Rover di lapangan.
+
+            2. **Proteksi Sinyal BLE & Anti-Deteksi Perangkat Liar:**
+               - **Signal Strength Cutoff (RSSI ≥ -80 dBm):** Mengabaikan sinyal liar dari smartphone atau perangkat asing di luar jangkauan efektif survei.
+               - **MAC Address Whitelisting:** Opsi filter berbasis MAC perangkat patok survei (Base Station A/B/C) terdaftar.
+               - **Advertising Payload Parser:** Membaca byte array telemetri khusus TopoSurvey 3D dan otomatis me-reject sinyal asing yang formatnya tidak sesuai.
+               - **Live Telemetry & Shield Banner:** Menampilkan statistik real-time jumlah sinyal lemah dan perangkat liar yang berhasil ditolak sistem.
+
+            3. **Dukungan Operasional Mode 3 HP (2 Patok Base + 1 Rover):**
+               - Memungkinkan survei topografi hanya dengan **3 smartphone** (2 Base Station di patok A & B + 1 Rover di jalon ukur).
+               - Algoritma interseksi lingkaran 2-titik bilateral dipadukan dengan elevasi barometer diferensial.
+               - Fitur **Tukar Sisi Baseline (+Y / -Y)** instan langsung dari layar Rover jika area survei berada di seberang garis patok A-B.
+               - Otomatis upgrade ke trilaterasi kuadrat terkecil (Least Squares) jika 3 atau lebih Base Station terdeteksi.
+
+            4. **Penyimpanan Pengaturan Persisten (SharedPreferences):**
+               - Nilai ambang batas GPS, toleransi RSSI BLE, whitelisting, dan preferensi sisi kuadran survei tersimpan permanen di perangkat tanpa perlu disetel ulang saat membuka aplikasi.
+
+            5. **Penyempurnaan Tampilan & Simulasi Cerdas:**
+               - Tombol Simulasi diperjelas dengan dialog konfirmasi dan banner ungu pada Rover agar tidak membingungkan surveyor saat digunakan di lapangan asli.
+               - Deteksi otomatis mode simulasi 3 HP atau 4 HP sesuai konfigurasi patok.
 
             ---
 
